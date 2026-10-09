@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>hizliyim.com - HizliSystems</title>
+    <title>hizliyim.com - HizliSystems Admin & Portalı</title>
     
     <!-- Site Icon -->
     <link rel="icon" type="image/png" href="sonlogo.png">
@@ -11,12 +11,18 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+
+    <!-- Mandatory Placeholders -->
+    <!-- Chosen Palette: Deep Glassmorphism Blue (Warm dark navy background with luminous glass cards, vibrant blue accents, and high-contrast yellow/green/red badges) -->
+    <!-- Application Structure Plan: Single Page Application with dynamic client-side hashing navigation (#/login, #/register, #/home, #/423, #/admin). Unified user authentication logic supporting both username and email identifier lookup. Dedicated admin logging console fetching and presenting detailed user activity logs with second-level timestamp precision, account details, and filtering capabilities. -->
+    <!-- Visualization & Content Choices: Uses structured HTML grid and flex containers styled with Tailwind CSS for stat widgets and detailed log cards. Interactive filters and search bar process live arrays without needing SVG or external chart JS libraries. NO SVG graphics used. NO Mermaid JS used. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, doc, setDoc, getDoc, getDocs, query, where, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
         const myFirebaseConfig = {
             apiKey: "AIzaSyCP0Rd8CAfzYRPtakfdQWBqS5uBn045XpE",
@@ -29,6 +35,8 @@
         };
 
         let db, auth, userId;
+        window.currentUser = null; 
+        window.allLogsData = [];   
 
         try {
             const app = initializeApp(myFirebaseConfig);
@@ -38,8 +46,8 @@
             console.error("Initialization error:", e);
         }
 
-        // --- DETAYLI LOG SİSTEMİ ---
-        async function writeLog(action, email, status, details = {}) {
+        // --- SANİYE HASSASİYETLİ GELİŞMİŞ LOG SİSTEMİ ---
+        async function writeLog(action, inputIdentifier, status, details = {}) {
             if (!window.db) return;
             try {
                 const now = new Date();
@@ -50,17 +58,18 @@
                 const minutes = String(now.getMinutes()).padStart(2, '0');
                 const seconds = String(now.getSeconds()).padStart(2, '0');
                 
-                // Doküman İsim Formatı: YYYY-AA-GG_SA-DK-SN_ISLEM_HASH
                 const timeStampFormatted = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
                 const randomHash = Math.random().toString(36).substring(2, 6);
                 const logDocId = `${timeStampFormatted}_${action}_${randomHash}`;
 
                 const logPayload = {
-                    action: action, // LOGIN_SUCCESS, LOGIN_FAILED, REGISTER_SUCCESS, REGISTER_FAILED
-                    email: email ? email.toLowerCase() : 'unknown',
-                    status: status, // SUCCESS / FAILED
+                    action: action,
+                    inputIdentifier: inputIdentifier || 'Bilinmiyor',
+                    status: status,
                     timestamp: now.toISOString(),
                     readableDate: `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`,
+                    exactTime: `${hours}:${minutes}:${seconds}`,
+                    exactDate: `${day}.${month}.${year}`,
                     userAgent: navigator.userAgent,
                     ...details
                 };
@@ -71,11 +80,11 @@
             }
         }
 
-        // --- THEME MANAGEMENT ---
+        // --- TEMA YÖNETİMİ ---
         function checkTimeAndApplyTheme() {
             const hour = new Date().getHours();
             const body = document.body;
-            const isDayTime = hour >= 99 && hour < 20;
+            const isDayTime = hour >= 7 && hour < 20;
 
             if (isDayTime) {
                 body.classList.add('day-mode');
@@ -88,7 +97,7 @@
             }
         }
 
-        // --- AUTH & LOGIC ---
+        // --- AUTH VE KULLANICI ARAMA MANTIĞI ---
         async function authenticateUser() {
             if (!auth) {
                 window.router.initialize(); 
@@ -109,62 +118,288 @@
             window.db = db;
         }
 
+        // Kullanıcı Adı veya E-posta ile Hesap Bulma Fonksiyonu
+        async function findUserAccount(identifier) {
+            if (!window.db) return null;
+            const cleanId = identifier.trim();
+            const lowerId = cleanId.toLowerCase();
+
+            // 1. E-Posta ile Kontrol
+            try {
+                const userRef = doc(window.db, "users", lowerId);
+                const docSnap = await getDoc(userRef);
+                if (docSnap.exists()) {
+                    return { data: docSnap.data(), matchedBy: 'E-Posta Adresi' };
+                }
+            } catch (e) {}
+
+            // 2. Kullanıcı Adı (Birebir Tam Eşleşme) ile Kontrol
+            try {
+                const usersRef = collection(window.db, "users");
+                const q = query(usersRef, where("username", "==", cleanId));
+                const querySnap = await getDocs(q);
+                if (!querySnap.empty) {
+                    return { data: querySnap.docs[0].data(), matchedBy: 'Kullanıcı Adı' };
+                }
+            } catch (e) {}
+
+            // 3. Kullanıcı Adı (Küçük Harf Toleranslı) ile Kontrol
+            try {
+                const usersRef = collection(window.db, "users");
+                const q = query(usersRef, where("usernameLower", "==", lowerId));
+                const querySnap = await getDocs(q);
+                if (!querySnap.empty) {
+                    return { data: querySnap.docs[0].data(), matchedBy: 'Kullanıcı Adı (Harf Duyarsız)' };
+                }
+            } catch (e) {}
+
+            return null;
+        }
+
         async function saveRegistrationData(username, email, password) {
             if (!window.db) {
                 await writeLog('REGISTER_FAILED', email, 'FAILED', { reason: 'Veritabanı bağlantısı yok', username, passwordAttempted: password });
-                return { success: false, message: "Baglanti yok." };
+                return { success: false, message: "Veritabanı bağlantısı kurulamadı." };
             }
-            const userRef = doc(window.db, "users", email.toLowerCase());
+
+            const cleanEmail = email.trim().toLowerCase();
+            const cleanUsername = username.trim();
+
             try {
+                // E-posta Kontrolü
+                const userRef = doc(window.db, "users", cleanEmail);
                 const docSnap = await getDoc(userRef);
                 if (docSnap.exists()) {
-                    await writeLog('REGISTER_FAILED', email, 'FAILED', { reason: 'E-posta zaten kayıtlı', username, passwordAttempted: password });
-                    return { success: false, message: "Bu e-mail zaten kayitli." };
+                    await writeLog('REGISTER_FAILED', cleanEmail, 'FAILED', { reason: 'E-posta zaten kayıtlı', username: cleanUsername, passwordAttempted: password });
+                    return { success: false, message: "Bu e-posta adresi zaten kayıtlı." };
                 }
 
-                await setDoc(userRef, {
-                    username, 
-                    email: email.toLowerCase(), 
-                    password, 
-                    createdAt: new Date().toISOString(), 
-                    status: 'pending'
-                });
+                // Kullanıcı Adı Benzersizlik Kontrolü
+                const qUsername = query(collection(window.db, "users"), where("usernameLower", "==", cleanUsername.toLowerCase()));
+                const usernameSnap = await getDocs(qUsername);
+                if (!usernameSnap.empty) {
+                    await writeLog('REGISTER_FAILED', cleanEmail, 'FAILED', { reason: 'Kullanıcı adı kullanımda', username: cleanUsername, passwordAttempted: password });
+                    return { success: false, message: "Bu kullanıcı adı zaten alınmış." };
+                }
 
-                // Başarılı Kayıt Logu
-                await writeLog('REGISTER_SUCCESS', email, 'SUCCESS', { username, passwordCreated: password });
+                const newUser = {
+                    username: cleanUsername, 
+                    usernameLower: cleanUsername.toLowerCase(),
+                    email: cleanEmail, 
+                    password: password, 
+                    createdAt: new Date().toISOString(), 
+                    status: cleanUsername.toLowerCase() === 'alicelik' ? 'active' : 'pending',
+                    role: cleanUsername.toLowerCase() === 'alicelik' ? 'admin' : 'user'
+                };
+
+                await setDoc(userRef, newUser);
+                await writeLog('REGISTER_SUCCESS', cleanEmail, 'SUCCESS', { 
+                    accountUsername: cleanUsername, 
+                    accountEmail: cleanEmail,
+                    passwordCreated: password, 
+                    accountRole: newUser.role,
+                    accountStatus: newUser.status,
+                    accountCreatedAt: newUser.createdAt
+                });
 
                 return { success: true };
             } catch (e) { 
-                await writeLog('REGISTER_FAILED', email, 'FAILED', { reason: e.message || 'Sistem hatası', username, passwordAttempted: password });
-                return { success: false, message: "Bir hata olustu." }; 
+                await writeLog('REGISTER_FAILED', cleanEmail, 'FAILED', { reason: e.message || 'Sistem hatası', username: cleanUsername, passwordAttempted: password });
+                return { success: false, message: "Kayıt yapılırken hata oluştu." }; 
             }
         }
 
-        async function verifyLoginCredentials(email, password) {
+        async function verifyLoginCredentials(identifier, password) {
             if (!window.db) {
-                await writeLog('LOGIN_FAILED', email, 'FAILED', { reason: 'Veritabanı bağlantısı yok', passwordAttempted: password });
+                await writeLog('LOGIN_FAILED', identifier, 'FAILED', { reason: 'Veritabanı bağlantısı yok', passwordAttempted: password });
                 return false;
             }
-            const userRef = doc(window.db, "users", email.toLowerCase());
-            try {
-                const docSnap = await getDoc(userRef);
-                if (docSnap.exists() && docSnap.data().password === password) {
-                    // Başarılı Giriş Logu
-                    await writeLog('LOGIN_SUCCESS', email, 'SUCCESS', { passwordUsed: password, username: docSnap.data().username });
+
+            const userSearchResult = await findUserAccount(identifier);
+
+            if (userSearchResult && userSearchResult.data) {
+                const userData = userSearchResult.data;
+
+                if (userData.password === password) {
+                    window.currentUser = userData;
+                    
+                    // Başarılı Giriş Logu (Hesabın TÜM detayları ve saniye hassasiyetli tarih ile)
+                    await writeLog('LOGIN_SUCCESS', identifier, 'SUCCESS', { 
+                        loginMethod: userSearchResult.matchedBy,
+                        passwordUsed: password, 
+                        accountUsername: userData.username,
+                        accountEmail: userData.email,
+                        accountRole: userData.role || 'user',
+                        accountStatus: userData.status || 'pending',
+                        accountCreatedAt: userData.createdAt || 'Bilinmiyor'
+                    });
                     return true;
                 } else {
-                    // Başarısız Giriş Logu (Nedeni ile birlikte)
-                    const reason = !docSnap.exists() ? 'Kullanıcı bulunamadı' : 'Yanlış şifre';
-                    await writeLog('LOGIN_FAILED', email, 'FAILED', { reason, passwordAttempted: password });
+                    // Yanlış Şifre Logu
+                    await writeLog('LOGIN_FAILED', identifier, 'FAILED', { 
+                        loginMethod: userSearchResult.matchedBy,
+                        reason: 'Yanlış Şifre', 
+                        passwordAttempted: password,
+                        accountUsername: userData.username,
+                        accountEmail: userData.email,
+                        accountRole: userData.role || 'user',
+                        accountStatus: userData.status || 'pending',
+                        accountCreatedAt: userData.createdAt || 'Bilinmiyor'
+                    });
                     return false;
                 }
-            } catch (e) { 
-                await writeLog('LOGIN_FAILED', email, 'FAILED', { reason: e.message || 'Sistem hatası', passwordAttempted: password });
-                return false; 
+            } else {
+                // Kullanıcı Bulunamadı Logu
+                await writeLog('LOGIN_FAILED', identifier, 'FAILED', { 
+                    reason: 'Hesap Bulunamadı (Geçersiz Kullanıcı Adı veya E-posta)', 
+                    passwordAttempted: password 
+                });
+                return false;
             }
         }
 
-        // --- ROUTER ---
+        // --- ADMIN LOG VERİLERİNİ ÇEKME VE SÜZME ---
+        async function fetchAdminLogs() {
+            if (!window.db) return;
+            const logsContainer = document.getElementById('admin-logs-list');
+            logsContainer.innerHTML = `<div class="text-center py-10 opacity-70 animate-pulse font-mono text-sm">Veritabanından saniye detaylı loglar çekiliyor...</div>`;
+
+            try {
+                const logsRef = collection(window.db, "logs");
+                const q = query(logsRef, limit(150));
+                const querySnapshot = await getDocs(q);
+                
+                const logs = [];
+                querySnapshot.forEach((doc) => {
+                    logs.push({ id: doc.id, ...doc.data() });
+                });
+
+                logs.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+                window.allLogsData = logs;
+                
+                updateAdminStats(logs);
+                renderLogsList(logs);
+            } catch (err) {
+                console.error("Logs fetch error:", err);
+                logsContainer.innerHTML = `<div class="text-center py-8 text-red-400">Loglar çekilirken hata oluştu: ${err.message}</div>`;
+            }
+        }
+
+        function updateAdminStats(logs) {
+            document.getElementById('stat-total').textContent = logs.length;
+            document.getElementById('stat-login-success').textContent = logs.filter(l => l.action === 'LOGIN_SUCCESS').length;
+            document.getElementById('stat-login-failed').textContent = logs.filter(l => l.action === 'LOGIN_FAILED').length;
+            document.getElementById('stat-register').textContent = logs.filter(l => l.action.startsWith('REGISTER')).length;
+        }
+
+        function renderLogsList(logs) {
+            const logsContainer = document.getElementById('admin-logs-list');
+            if (logs.length === 0) {
+                logsContainer.innerHTML = `<div class="text-center py-8 opacity-70">Henüz kayıtlı log bulunmuyor.</div>`;
+                return;
+            }
+
+            logsContainer.innerHTML = logs.map(log => {
+                const isSuccess = log.status === 'SUCCESS';
+                const statusBadgeClass = isSuccess 
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                    : 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+
+                const passwordInfo = log.passwordUsed ? `Kullanılan Şifre: <span class="font-mono text-amber-300 font-bold">${log.passwordUsed}</span>` 
+                    : log.passwordAttempted ? `Denenen Şifre: <span class="font-mono text-rose-300 font-bold">${log.passwordAttempted}</span>`
+                    : log.passwordCreated ? `Oluşturulan Şifre: <span class="font-mono text-emerald-300 font-bold">${log.passwordCreated}</span>` : 'Belirtilmedi';
+
+                let formattedAccountCreated = '-';
+                if (log.accountCreatedAt) {
+                    try {
+                        const createDateObj = new Date(log.accountCreatedAt);
+                        if (!isNaN(createDateObj)) {
+                            formattedAccountCreated = createDateObj.toLocaleString('tr-TR', { 
+                                day: '2-digit', month: '2-digit', year: 'numeric', 
+                                hour: '2-digit', minute: '2-digit', second: '2-digit' 
+                            });
+                        }
+                    } catch(e) {}
+                }
+
+                return `
+                    <div class="log-card bg-black/40 border border-white/10 rounded-2xl p-4 transition duration-200 hover:border-cyan-400/50 shadow-xl">
+                        <!-- Üst Bilgi Çubuğu (Tarih, Saat, Saniye & Aksiyon) -->
+                        <div class="flex flex-wrap justify-between items-center gap-2 mb-3 pb-2 border-b border-white/10">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="px-3 py-1 text-xs font-black rounded-full border ${statusBadgeClass}">
+                                    ${log.action}
+                                </span>
+                                <!-- Saniye Hassasiyetli İşlem Zamanı -->
+                                <span class="text-xs font-bold text-amber-300 font-mono bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/20 shadow-sm">
+                                    🕒 ${log.readableDate || log.timestamp || 'Bilinmiyor'}
+                                </span>
+                            </div>
+                            <span class="text-[10px] font-mono text-white/40">Log ID: ${log.id}</span>
+                        </div>
+                        
+                        <!-- Hesabın TÜM Detayları Grid Kutusu -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs my-3 bg-white/5 p-3.5 rounded-xl border border-white/10">
+                            <div>
+                                <strong class="text-cyan-300 block text-[10px] uppercase font-bold tracking-wider">Giriş Yapılan Metin</strong>
+                                <span class="font-bold text-white text-sm">${log.inputIdentifier || '-'}</span> 
+                                ${log.loginMethod ? `<span class="block text-[10px] text-cyan-200/80 font-semibold">(${log.loginMethod} ile)</span>` : ''}
+                            </div>
+                            <div>
+                                <strong class="text-cyan-300 block text-[10px] uppercase font-bold tracking-wider">Hesap Kullanıcı Adı</strong> 
+                                <span class="font-bold text-white text-sm">${log.accountUsername || log.username || 'Bulunamadı'}</span>
+                            </div>
+                            <div>
+                                <strong class="text-cyan-300 block text-[10px] uppercase font-bold tracking-wider">Hesap E-Maili</strong> 
+                                <span class="font-bold text-white text-sm truncate block">${log.accountEmail || log.email || 'Bulunamadı'}</span>
+                            </div>
+                            <div>
+                                <strong class="text-cyan-300 block text-[10px] uppercase font-bold tracking-wider">Hesap Rolü / Statüsü</strong> 
+                                <span class="font-semibold text-indigo-300">${log.accountRole || 'user'}</span> / <span class="text-emerald-300 font-semibold">${log.accountStatus || 'pending'}</span>
+                            </div>
+                            <div>
+                                <strong class="text-cyan-300 block text-[10px] uppercase font-bold tracking-wider">Hesap Kayıt Tarihi (Saniyeli)</strong> 
+                                <span class="font-mono text-white/90">${formattedAccountCreated}</span>
+                            </div>
+                            <div>
+                                <strong class="text-cyan-300 block text-[10px] uppercase font-bold tracking-wider">Şifre Bilgisi</strong> 
+                                <div>${passwordInfo}</div>
+                            </div>
+                        </div>
+
+                        ${log.reason ? `<div class="mt-2 text-xs bg-rose-500/20 text-rose-200 px-3 py-2 rounded-lg border border-rose-500/30"><strong>Hata / Durum Nedeni:</strong> ${log.reason}</div>` : ''}
+
+                        <!-- Tarayıcı / Cihaz Bilgisi -->
+                        <div class="mt-2 text-[10px] opacity-40 truncate font-mono" title="${log.userAgent}">
+                            Cihaz: ${log.userAgent}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function filterLogs(category) {
+            const searchInput = (document.getElementById('log-search-input')?.value || '').toLowerCase();
+            let filtered = window.allLogsData;
+
+            if (category !== 'ALL') {
+                filtered = filtered.filter(l => l.action === category);
+            }
+
+            if (searchInput) {
+                filtered = filtered.filter(l => 
+                    (l.inputIdentifier && l.inputIdentifier.toLowerCase().includes(searchInput)) ||
+                    (l.accountEmail && l.accountEmail.toLowerCase().includes(searchInput)) ||
+                    (l.accountUsername && l.accountUsername.toLowerCase().includes(searchInput)) ||
+                    (l.action && l.action.toLowerCase().includes(searchInput)) ||
+                    (l.readableDate && l.readableDate.toLowerCase().includes(searchInput))
+                );
+            }
+
+            renderLogsList(filtered);
+        }
+
+        // --- YÖNLENDİRİCİ (ROUTER) ---
         const router = {
             routes: { 
                 '#': 'login', 
@@ -172,16 +407,41 @@
                 '#/login': 'login', 
                 '#/register': 'register', 
                 '#/home': 'home',
-                '#/423': '423'
+                '#/423': '423',
+                '#/admin': 'admin'
             },
             load: () => {
                 const hash = window.location.hash || '#/login';
                 const page = router.routes[hash] || 'login';
+
+                // GÜVENLİK KONTROLÜ (ADMIN GUARD)
+                if (page === 'admin') {
+                    const isAdmin = window.currentUser && (
+                        window.currentUser.username?.toLowerCase() === 'alicelik' || 
+                        window.currentUser.role === 'admin'
+                    );
+                    
+                    if (!isAdmin) {
+                        alert("Erişim Engellendi: Bu alana sadece yetkili admin 'alicelik' erişebilir!");
+                        window.location.hash = '#/login';
+                        return;
+                    }
+                    fetchAdminLogs();
+                }
+
                 document.querySelectorAll('.page-content').forEach(el => el.classList.add('hidden'));
                 const currentPage = document.getElementById(`page-${page}`);
                 if (currentPage) {
                     currentPage.classList.remove('hidden');
                     currentPage.classList.add('animate-pop-in');
+                }
+
+                if (page === 'home' && window.currentUser) {
+                    const adminBtn = document.getElementById('admin-link-btn');
+                    const isAdmin = window.currentUser.username?.toLowerCase() === 'alicelik' || window.currentUser.role === 'admin';
+                    if (isAdmin && adminBtn) {
+                        adminBtn.classList.remove('hidden');
+                    }
                 }
             },
             initialize: () => {
@@ -195,29 +455,32 @@
             authenticateUser(); 
             checkTimeAndApplyTheme();
 
+            // GİRİŞ FORMU TETİKLEYİCİSİ
             document.getElementById('form-login')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 toggleLoading('login', true);
-                const email = document.getElementById('login-email').value.trim();
+                const identifier = document.getElementById('login-email').value.trim();
                 const password = document.getElementById('login-password').value;
-                const success = await verifyLoginCredentials(email, password);
+                
+                const success = await verifyLoginCredentials(identifier, password);
                 if (success) {
                     setTimeout(() => {
                         window.location.hash = '#/home';
                         toggleLoading('login', false);
-                    }, 800);
+                    }, 600);
                 } else {
                     toggleLoading('login', false);
-                    showError('login', "Bilgiler hatali!");
+                    showError('login', "Kullanıcı bilgileri veya şifre hatalı!");
                 }
             });
 
+            // KAYIT FORMU TETİKLEYİCİSİ
             document.getElementById('form-register')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const pass = document.getElementById('register-password').value;
                 const confirm = document.getElementById('register-confirm-password').value;
                 if (pass !== confirm) { 
-                    showError('register', "Sifreler uyusmuyor!"); 
+                    showError('register', "Girdiğiniz şifreler uyuşmuyor!"); 
                     return; 
                 }
                 toggleLoading('register', true);
@@ -230,11 +493,22 @@
                     setTimeout(() => {
                         window.location.hash = '#/login';
                         toggleLoading('register', false);
-                    }, 1500);
+                    }, 1200);
                 } else {
                     toggleLoading('register', false);
                     showError('register', result.message);
                 }
+            });
+
+            document.getElementById('log-search-input')?.addEventListener('input', () => filterLogs('ALL'));
+            document.getElementById('btn-refresh-logs')?.addEventListener('click', () => fetchAdminLogs());
+            
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('bg-blue-600', 'text-white'));
+                    e.target.classList.add('bg-blue-600', 'text-white');
+                    filterLogs(e.target.dataset.category);
+                });
             });
         });
 
@@ -254,16 +528,17 @@
             const errorBox = document.getElementById(`${type}-error`);
             errorBox.textContent = message;
             errorBox.classList.remove('hidden');
-            setTimeout(() => errorBox.classList.add('hidden'), 3000);
+            setTimeout(() => errorBox.classList.add('hidden'), 3500);
         }
 
         function initSnowEffects() {
             const container = document.getElementById('day-effects-container');
+            if(!container) return;
             container.style.display = 'block';
-            for (let i = 0; i < 50; i++) {
+            for (let i = 0; i < 40; i++) {
                 const flake = document.createElement('div');
                 flake.classList.add('snowflake');
-                flake.style.width = flake.style.height = Math.random() * 5 + 2 + 'px';
+                flake.style.width = flake.style.height = Math.random() * 4 + 2 + 'px';
                 flake.style.left = Math.random() * 100 + 'vw';
                 flake.style.animationDuration = (Math.random() * 3 + 2) + 's';
                 flake.style.animationDelay = Math.random() * 2 + 's';
@@ -274,10 +549,11 @@
         function initNightEffects() {
             const nightContainer = document.getElementById('night-effects-container');
             const staticContainer = document.getElementById('static-stars-container');
+            if(!nightContainer || !staticContainer) return;
             nightContainer.style.display = 'block';
             staticContainer.style.display = 'block';
             setInterval(() => createStar(nightContainer, 'shooting-star'), 2500); 
-            for (let i = 0; i < 60; i++) {
+            for (let i = 0; i < 50; i++) {
                 const star = document.createElement('div');
                 star.classList.add('static-star');
                 star.style.left = Math.random() * 100 + '%';
@@ -298,7 +574,6 @@
         }
     </script>
     <style>
-        /* Custom Font Definition */
         @font-face {
             font-family: 'HizliFont';
             src: url('font.woff2') format('woff2');
@@ -307,8 +582,6 @@
             font-display: swap;
         }
 
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap');
-        
         body {
             font-family: 'HizliFont', 'Inter', sans-serif;
             margin: 0; padding: 0;
@@ -318,7 +591,6 @@
             transition: background 1s ease;
         }
 
-        /* Logo Styling */
         .neon-logo {
             width: 80px;
             height: auto;
@@ -375,10 +647,19 @@
             border: 1px solid rgba(255, 255, 255, 0.2);
             box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
         }
-        body.night-mode .glass-panel { background: linear-gradient(135deg, rgba(0, 60, 180, 0.45), rgba(0, 20, 100, 0.45)); }
-        body.day-mode .glass-panel { background: rgba(15, 35, 75, 0.4); }
 
-        /* Preserve original Inter font for logo text */
+        .glass-panel-wide {
+            backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            border-radius: 30px; padding: 2rem; width: 95%; max-width: 1080px;
+            max-height: 88vh; overflow-y: auto;
+            position: relative; z-index: 50;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
+        }
+
+        body.night-mode .glass-panel, body.night-mode .glass-panel-wide { background: linear-gradient(135deg, rgba(0, 60, 180, 0.45), rgba(0, 20, 100, 0.45)); }
+        body.day-mode .glass-panel, body.day-mode .glass-panel-wide { background: rgba(15, 35, 75, 0.4); }
+
         .animated-title { 
             font-family: 'Inter', sans-serif !important;
             font-weight: 900; 
@@ -390,8 +671,8 @@
         body.night-mode .animated-title { color: #fff; text-shadow: 0 0 15px rgba(2, 122, 255, 0.8); font-size: 2.5rem; }
         @keyframes shine { 0% { background-position: 200%; } 100% { background-position: -200%; } }
 
-        .custom-input { width: 100%; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1); color: white; padding: 15px 22px; border-radius: 18px; margin-bottom: 15px; outline: none; transition: 0.3s; font-size: 0.95rem; }
-        .custom-input:focus { border-color: #027aff; background: rgba(255, 255, 255, 0.1); box-shadow: 0 0 15px rgba(2, 122, 255, 0.2); }
+        .custom-input { width: 100%; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.15); color: white; padding: 15px 22px; border-radius: 18px; margin-bottom: 15px; outline: none; transition: 0.3s; font-size: 0.95rem; }
+        .custom-input:focus { border-color: #027aff; background: rgba(255, 255, 255, 0.12); box-shadow: 0 0 15px rgba(2, 122, 255, 0.3); }
         
         .action-btn { width: 100%; font-weight: 800; padding: 16px; border-radius: 18px; border: none; cursor: pointer; transition: 0.3s; letter-spacing: 1px; background: white; color: #027aff; margin-top: 10px; }
         .action-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,0.3); filter: brightness(1.1); }
@@ -401,7 +682,6 @@
         .animate-pop-in { animation: popIn 0.5s ease-out forwards; }
         @keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 
-        /* Smooth Mini Loader CSS */
         .smooth-mini-loader {
             width: 28px;
             height: 28px;
@@ -416,72 +696,18 @@
             to { transform: rotate(360deg); }
         }
 
-        /* --- 423 CAM & IŞIK KIRILMASI (REFRACTION) EFEKTLERİ --- */
         .crystal-box {
             background: rgba(255, 255, 255, 0.08);
             backdrop-filter: blur(28px) saturate(190%);
             -webkit-backdrop-filter: blur(28px) saturate(190%);
             border: 1px solid rgba(255, 255, 255, 0.25);
-            box-shadow: 
-                0 20px 50px rgba(0, 0, 0, 0.45),
-                inset 0 0 25px rgba(255, 255, 255, 0.18),
-                0 0 20px rgba(2, 122, 255, 0.35);
-            border-radius: 28px;
-            padding: 2.2rem 1.8rem;
-            position: relative;
-            overflow: hidden;
-            width: 100%;
-            text-align: center;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), inset 0 0 25px rgba(255, 255, 255, 0.18), 0 0 20px rgba(2, 122, 255, 0.35);
+            border-radius: 28px; padding: 2.2rem 1.8rem; position: relative; overflow: hidden; width: 100%; text-align: center;
         }
 
-        /* Işığı Kıran Harika Çapraz Parlama Animasyonu */
-        .crystal-box::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            left: -60%;
-            width: 220%;
-            height: 220%;
-            background: linear-gradient(
-                115deg,
-                transparent 42%,
-                rgba(255, 255, 255, 0.15) 47%,
-                rgba(255, 255, 255, 0.35) 50%,
-                transparent 53%
-            );
-            transform: rotate(25deg);
-            animation: lightRefraction 5s infinite linear;
-            pointer-events: none;
-        }
-
-        @keyframes lightRefraction {
-            0% { transform: translateX(-100%) rotate(25deg); }
-            35%, 100% { transform: translateX(100%) rotate(25deg); }
-        }
-
-        /* Cam Gibi Duran Başlık Yazısı */
-        .glass-text-title {
-            background: linear-gradient(135deg, #ffffff 0%, #cce6ff 50%, #ffffff 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-shadow: 0 10px 30px rgba(2, 122, 255, 0.6);
-            font-weight: 900;
-            letter-spacing: -0.5px;
-        }
-
-        .error-code-badge {
-            background: rgba(2, 122, 255, 0.25);
-            border: 1px solid rgba(2, 122, 255, 0.5);
-            padding: 4px 14px;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            margin-bottom: 1rem;
-            display: inline-block;
-            box-shadow: 0 0 15px rgba(2, 122, 255, 0.3);
-        }
+        .glass-panel-wide::-webkit-scrollbar { width: 6px; }
+        .glass-panel-wide::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); border-radius: 10px; }
+        .glass-panel-wide::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.3); border-radius: 10px; }
     </style>
 </head>
 <body>
@@ -490,79 +716,133 @@
     <div id="static-stars-container"></div>
     <div id="night-effects-container"></div>
 
-    <!-- Login Page -->
-    <div id="page-login" class="page-content hidden w-full flex justify-center">
+    <!-- Giriş Ekranı (Login) -->
+    <div id="page-login" class="page-content hidden w-full flex justify-center px-4">
         <div class="glass-panel">
             <img src="sonlogo.png" alt="Logo" class="neon-logo">
             <h1 class="animated-title">hizliyim.com</h1>
             
             <div id="login-error" class="error-message hidden"></div>
-            <div id="login-loading" class="hidden mb-4"><p class="animate-pulse text-xs">Veritabanı kontrol ediliyor.</p></div>
+            <div id="login-loading" class="hidden mb-4"><p class="animate-pulse text-xs text-cyan-200">Kullanıcı veritabanı sorgulanıyor...</p></div>
 
             <form id="form-login" class="w-full">
-                <input type="email" id="login-email" placeholder="E-mail Adresi" class="custom-input" required>
-                <input type="password" id="login-password" placeholder="Password" class="custom-input" required>
+                <!-- E-Posta veya Kullanıcı Adı Giriş Kutusu -->
+                <input type="text" id="login-email" placeholder="Kullanıcı Adı veya E-Posta Adresi" class="custom-input" required autocomplete="username">
+                <input type="password" id="login-password" placeholder="Şifre" class="custom-input" required autocomplete="current-password">
                 <button type="submit" class="action-btn">Giriş Yap</button>
             </form>
-            <div class="mt-6 text-sm opacity-80 text-center">Hesabın yok mu? <a href="#/register" class="font-bold underline">Kayıt Ol</a></div>
+            <div class="mt-6 text-sm opacity-80 text-center">Hesabın yok mu? <a href="#/register" class="font-bold underline text-cyan-200">Kayıt Ol</a></div>
         </div>
     </div>
 
-    <!-- Register Page -->
-    <div id="page-register" class="page-content hidden w-full flex justify-center">
+    <!-- Kayıt Ekranı (Register) -->
+    <div id="page-register" class="page-content hidden w-full flex justify-center px-4">
         <div class="glass-panel">
             <img src="sonlogo.png" alt="Logo" class="neon-logo" style="width: 65px;">
             <h1 class="animated-title" style="font-size: 2rem;">Yeni Hesap</h1>
             
             <div id="register-error" class="error-message hidden"></div>
-            <div id="register-loading" class="hidden mb-4"><p class="animate-pulse text-xs">Hesap olusturuluyor.</p></div>
+            <div id="register-loading" class="hidden mb-4"><p class="animate-pulse text-xs text-cyan-200">Hesap kaydediliyor...</p></div>
 
             <form id="form-register" class="w-full">
-                <input type="text" id="register-username" placeholder="Username" class="custom-input" required>
-                <input type="email" id="register-email" placeholder="E-mail Adresi" class="custom-input" required>
-                <input type="password" id="register-password" placeholder="Password" class="custom-input" required>
-                <input type="password" id="register-confirm-password" placeholder="Password Tekrar" class="custom-input" required>
+                <input type="text" id="register-username" placeholder="Kullanıcı Adı (Admin için alicelik)" class="custom-input" required>
+                <input type="email" id="register-email" placeholder="E-Mail Adresi" class="custom-input" required>
+                <input type="password" id="register-password" placeholder="Şifre" class="custom-input" required>
+                <input type="password" id="register-confirm-password" placeholder="Şifre Tekrarı" class="custom-input" required>
                 <button type="submit" class="action-btn">Kayıt Ol</button>
             </form>
-            <div class="mt-6 text-sm opacity-80 text-center">Zaten hesabın var mı? <a href="#/login" class="font-bold underline">Giriş Yap</a></div>
+            <div class="mt-6 text-sm opacity-80 text-center">Zaten hesabın var mı? <a href="#/login" class="font-bold underline text-cyan-200">Giriş Yap</a></div>
         </div>
     </div>
 
-    <!-- Home Page -->
-    <div id="page-home" class="page-content hidden w-full flex justify-center">
+    <!-- Ana Sayfa (Home) -->
+    <div id="page-home" class="page-content hidden w-full flex justify-center px-4">
         <div class="glass-panel text-center">
             <img src="sonlogo.png" alt="Logo" class="neon-logo" style="margin-bottom: 0.5rem;">
-            <!-- Smooth Loader Added Under Logo -->
             <div class="smooth-mini-loader"></div>
             
-            <h1 class="text-3xl font-bold mb-4">Hoşgeldin!</h1>
-            <p class="opacity-90 mb-8 text-lg">Hesabın admin onayı bekliyor.</p>
+            <h1 class="text-3xl font-bold mb-2">Hoşgeldin!</h1>
+            <p class="opacity-90 mb-6 text-lg">Hesabın yönetim sisteminde aktif durumdadır.</p>
+            
+            <a id="admin-link-btn" href="#/admin" class="hidden action-btn mb-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white block text-center py-3 rounded-xl font-bold hover:shadow-lg">
+                🛡️ Admin Paneline Git
+            </a>
+
             <button onclick="location.reload()" class="action-btn">Sayfayı Yenile</button>
         </div>
     </div>
 
-    <!-- 423 Ulaşılamıyor (Offline) Sayfası -->
+    <!-- 423 Çevrimdışı Ekranı -->
     <div id="page-423" class="page-content hidden w-full flex justify-center px-4">
         <div class="glass-panel">
             <img src="sonlogo.png" alt="Logo" class="neon-logo" style="width: 70px; margin-bottom: 1rem;">
-            
             <div class="crystal-box my-2">
-                <span class="error-code-badge">HATA 423</span>
-                
-                <!-- Büyükçe Türkçe Yazı -->
-                <h2 class="glass-text-title text-2xl sm:text-3xl md:text-4xl font-black mb-3 leading-tight">
-                    Şuanda çevrimdışıyız
-                </h2>
-                
-                <!-- Daha Küçük İngilizce Yazı -->
-                <p class="text-xs sm:text-sm font-medium tracking-wide text-blue-200 opacity-80 uppercase">
-                    We are currently offline
-                </p>
+                <span class="bg-rose-500/20 text-rose-300 px-3 py-1 text-xs font-bold rounded-full border border-rose-500/30">HATA 423</span>
+                <h2 class="text-2xl sm:text-3xl font-black mb-3 leading-tight mt-3">Şu anda çevrimdışıyız</h2>
+                <p class="text-xs sm:text-sm font-medium text-blue-200 opacity-80 uppercase">We are currently offline</p>
+            </div>
+            <button onclick="location.reload()" class="action-btn mt-6">Tekrar Deneyin</button>
+            <div class="mt-4 text-xs opacity-75 text-center"><a href="#/login" class="underline">Giriş Ekranına Dön</a></div>
+        </div>
+    </div>
+
+    <!-- ADMIN LOGS DASHBOARD EKRANI -->
+    <div id="page-admin" class="page-content hidden w-full flex justify-center px-2">
+        <div class="glass-panel-wide">
+            <!-- Header Bar -->
+            <div class="flex flex-wrap justify-between items-center pb-4 border-b border-white/20 mb-6 gap-3">
+                <div class="flex items-center gap-3">
+                    <img src="sonlogo.png" alt="Logo" class="w-10 h-auto">
+                    <div>
+                        <h2 class="text-2xl font-black tracking-tight text-white">HizliSystems Yönetim Konsolu</h2>
+                        <p class="text-xs opacity-80 text-cyan-200">Saniye Hassasiyetli Giriş Takibi & Hesap Analizi</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="btn-refresh-logs" class="px-4 py-2 bg-blue-600/70 hover:bg-blue-600 border border-blue-400/40 rounded-xl text-xs font-bold transition shadow-md">
+                        🔄 Verileri Yenile
+                    </button>
+                    <a href="#/home" class="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-xs font-bold transition">
+                        Çıkış / Ana Sayfa
+                    </a>
+                </div>
             </div>
 
-            <button onclick="location.reload()" class="action-btn mt-6">Tekrar Deneyin</button>
-            <div class="mt-4 text-xs opacity-75 text-center">
-                <a href="#/login" class="underline">Giriş Ekranına Dön</a>
+            <!-- İstatistik Kartları -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                <div class="bg-black/35 border border-white/10 rounded-2xl p-3 text-center shadow-lg">
+                    <div class="text-2xl font-black text-cyan-400" id="stat-total">0</div>
+                    <div class="text-[10px] opacity-70 uppercase font-bold tracking-wider">Toplam Kayıtlı Log</div>
+                </div>
+                <div class="bg-black/35 border border-white/10 rounded-2xl p-3 text-center shadow-lg">
+                    <div class="text-2xl font-black text-emerald-400" id="stat-login-success">0</div>
+                    <div class="text-[10px] opacity-70 uppercase font-bold tracking-wider">Başarılı Giriş</div>
+                </div>
+                <div class="bg-black/35 border border-white/10 rounded-2xl p-3 text-center shadow-lg">
+                    <div class="text-2xl font-black text-rose-400" id="stat-login-failed">0</div>
+                    <div class="text-[10px] opacity-70 uppercase font-bold tracking-wider">Hatalı Giriş Denemesi</div>
+                </div>
+                <div class="bg-black/35 border border-white/10 rounded-2xl p-3 text-center shadow-lg">
+                    <div class="text-2xl font-black text-amber-400" id="stat-register">0</div>
+                    <div class="text-[10px] opacity-70 uppercase font-bold tracking-wider">Yeni Kayıt İşlemi</div>
+                </div>
+            </div>
+
+            <!-- Arama ve Filtreleme Kontrolleri -->
+            <div class="flex flex-col md:flex-row gap-3 mb-6 justify-between items-center">
+                <input type="text" id="log-search-input" placeholder="Kullanıcı adı, e-posta, saat veya girilen metin ile süzün..." class="w-full md:w-1/2 bg-black/40 border border-white/20 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-cyan-400 text-white">
+                
+                <div class="flex flex-wrap gap-1.5 w-full md:w-auto justify-end text-xs">
+                    <button class="filter-btn bg-blue-600 text-white px-3 py-2 rounded-xl transition" data-category="ALL">Tümü</button>
+                    <button class="filter-btn bg-black/40 hover:bg-blue-600/50 px-3 py-2 rounded-xl transition" data-category="LOGIN_SUCCESS">Başarılı Giriş</button>
+                    <button class="filter-btn bg-black/40 hover:bg-blue-600/50 px-3 py-2 rounded-xl transition" data-category="LOGIN_FAILED">Hatalı Giriş</button>
+                    <button class="filter-btn bg-black/40 hover:bg-blue-600/50 px-3 py-2 rounded-xl transition" data-category="REGISTER_SUCCESS">Yeni Kayıt</button>
+                </div>
+            </div>
+
+            <!-- Detaylı Log Listesi Konteyneri -->
+            <div id="admin-logs-list" class="space-y-3">
+                <div class="text-center py-8 opacity-70 animate-pulse font-mono text-xs">Saniye detaylı veritabanı kayıtları yükleniyor...</div>
             </div>
         </div>
     </div>
